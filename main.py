@@ -1,47 +1,66 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
-from pymongo import MongoClient
 from bson.objectid import ObjectId
-from schemas_task import tasks_entity
 from model_task import Task
+from db import MongoDBConnection
+from schemas_task import tasks_entity, task_entity
 
 app = FastAPI()
 
-connection = MongoClient()
-db = connection["todo"]
-tasks_collection = db["tasks"]
+
+@app.get("/")
+async def find_tasks() -> JSONResponse:
+    with MongoDBConnection() as connection:
+        tasks_collection = connection.todo.tasks
+        tasks = tasks_entity(tasks_collection.find())
+        return JSONResponse(tasks, status_code=200)
 
 
-@app.get('/')
-async def find_tasks(title: str = None, description: str = None, completed: bool = None) -> JSONResponse:
-    query = {}
-    if title is not None:
-        query["title"] = {"$regex": title}
-    if description is not None:
-        query["description"] = {"$regex": description}
-    if completed is not None:
-        query["completed"] = completed
-    return JSONResponse(tasks_entity(tasks_collection.find(query)),
-                        status_code=200)
-
-
-@app.post('/')
+@app.post("/")
 async def add_task(task: Task) -> JSONResponse:
-    tasks_collection.insert_one(dict(task))
-    return JSONResponse({"message": "Task added successfully"},
-                        status_code=200)
+    with MongoDBConnection() as connection:
+        tasks_collection = connection.todo.tasks
+        insert_result = tasks_collection.insert_one(dict(task))
+        insert_task = task_entity(tasks_collection.find_one(
+            {"_id": insert_result.inserted_id}))
+        return JSONResponse({"message": "Task added successfully",
+                             "task": insert_task},
+                            status_code=201)
 
 
-@app.delete('/{id_task}')
-async def delete_task(id_task: str) -> JSONResponse:
-    tasks_collection.delete_one({"_id": ObjectId(id_task)})
-    return JSONResponse({"message": "Task deleted successfully"},
-                        status_code=200)
+@app.delete("/{task_id}")
+async def delete_task(task_id: str) -> JSONResponse:
+    if not ObjectId.is_valid(task_id):
+        raise HTTPException(status_code=400, detail="Invalid ID format")
+
+    with MongoDBConnection() as connection:
+        tasks_collection = connection.todo.tasks
+        delete_result = tasks_collection.delete_one({"_id": ObjectId(task_id)})
+
+        if delete_result.deleted_count == 1:
+            return JSONResponse({"message": "Task deleted successfully"},
+                                status_code=200)
+        raise HTTPException(status_code=404, detail="Task not found")
 
 
-@app.put('/{id_task}')
-async def update_task(id_task: str, task: Task) -> JSONResponse:
-    tasks_collection.update_one({"_id": ObjectId(id_task)},
-                                {"$set": dict(task)})
-    return JSONResponse({"message": "Task updated successfully"},
-                        status_code=200)
+@app.put("/{task_id}")
+async def update_task(task_id: str, task: Task) -> JSONResponse:
+    if not ObjectId.is_valid(task_id):
+        raise HTTPException(status_code=400, detail="Invalid ID format")
+
+    with MongoDBConnection() as connection:
+        tasks_collection = connection.todo.tasks
+
+        existing_task = tasks_collection.find_one({"_id": ObjectId(task_id)})
+        if not existing_task:
+            raise HTTPException(status_code=404, detail="Task not found")
+
+        update_result = tasks_collection.update_one({"_id": ObjectId(task_id)},
+                                                    {"$set": dict(task)})
+        if update_result.modified_count == 1:
+            updated_task = task_entity(tasks_collection.find_one(
+                {"_id": ObjectId(task_id)}))
+            return JSONResponse({"message": "Task updated successfully",
+                                 "task": updated_task},
+                                status_code=200)
+        raise HTTPException(status_code=400, detail="Update failed")
