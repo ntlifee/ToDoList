@@ -8,11 +8,8 @@ class MongoDBConnection:
         self.connection = None
 
     def __enter__(self):
-        try:
-            self.connection = MongoClient(self.host, self.port)
-            return self.connection
-        except Exception as e:
-            raise ConnectionError(f"Failed to connect to MongoDB: {e}")
+        self.connection = MongoClient(self.host, self.port)
+        return self.connection
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.connection.close()
